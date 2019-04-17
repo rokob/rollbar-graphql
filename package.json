@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "start": "node ."
+  },
+  "dependencies": {
+    "graphql-yoga": "^1.17.4",
+    "node-fetch": "^2.3.0"
+  },
+  "name": "rollbar-graphql",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT"
+}
