@@ -1,4 +1,5 @@
 require('dotenv').config()
+
 const { GraphQLServer } = require('graphql-yoga')
 const fetch = require('node-fetch')
 
@@ -109,13 +110,13 @@ const typeDefs = `
   }
 
   type Query {
-    users: [User!]!
+    users(first: Int, skip: Int): [User!]!
     user(id: Int!): User
 
-    teams: [Team!]!
+    teams(first: Int, skip: Int): [Team!]!
     team(id: Int!): Team
 
-    projects: [Project!]!
+    projects(first: Int, skip: Int): [Project!]!
     project(id: Int!): Project
 
     items(
@@ -199,15 +200,35 @@ const typeDefs = `
     deleted
   }
 `
+
+function trunc({ first, skip }, promise) {
+  if (!promise) {
+    return promise;
+  }
+  return promise.then(data => {
+    if (!data) {
+      return data;
+    }
+    if (first == null && skip == null) {
+      return data;
+    }
+    if (first == null) {
+      return data.slice(skip + 1);
+    }
+    skip = skip || -1;
+    return data.slice(skip + 1, skip + 1 + first);
+  })
+}
+
 const resolvers = {
   Query: {
-    users: (_p, _a, ctx) => maybeGet(buildAccountUrl(ctx, 'users'), 'users', (u) => u.username && u.email),
+    users: (_p, args, ctx) => trunc(args, maybeGet(buildAccountUrl(ctx, 'users'), 'users', (u) => u.username && u.email)),
     user: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}`)),
 
-    teams: (_p, _a, ctx) => maybeGet(buildAccountUrl(ctx, 'teams')),
+    teams: (_p, args, ctx) => trunc(args, maybeGet(buildAccountUrl(ctx, 'teams'))),
     team: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `team/${id}`)),
 
-    projects: (_p, _a, ctx) => maybeGet(buildAccountUrl(ctx, 'projects'), undefined, (p) => p.status),
+    projects: (_p, args, ctx) => trunc(args, maybeGet(buildAccountUrl(ctx, 'projects'), undefined, (p) => p.status)),
     project: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `project/${id}`)),
 
     items: (_, args, ctx) => getItems(ctx, args),
@@ -243,7 +264,7 @@ const resolvers = {
 
   RqlJob: {
     project: ({ project_id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `project/${project_id}`)),
-    result: ({ id, result}, _, ctx) => {
+    result: ({ id, result }, _, ctx) => {
       if (result) {
         return result;
       }
@@ -291,14 +312,14 @@ function buildProjectUrl(ctx, endpoint, query) {
 function niceUrl(url) {
   let parts = url.split('?');
   if (parts[1].length > 46) {
-    return [parts[0].substr(30), parts[1].substr(46)].join('?');
+    return [parts[0].substr(BASE_URL.length-1), parts[1].substr(46)].join('?');
   }
-  return parts[0].substr(30);
+  return parts[0].substr(BASE_URL.length-1);
 }
 
 function maybeGet(url, path, filter) {
   if (VERBOSE) {
-    console.log("GET :", niceUrl(url));
+    console.log("GET: ", niceUrl(url));
   }
   return fetch(url)
     .then(res => res.json())
@@ -356,14 +377,18 @@ function getItems(ctx, args) {
 
 function contextFn({ request, response, connection }) {
   let ctx = {accountToken: ACCOUNT_TOKEN, projectToken: PROJECT_TOKEN}
-  if (request.headers && request.headers['x-account-token']) {
-    ctx.accountToken = request.headers['x-account-token'];
+  let { headers } = request;
+  if (!headers) {
+    return ctx;
   }
-  if (request.headers && request.headers['x-project-token']) {
-    ctx.projectToken = request.headers['x-project-token'];
-  }
+  ctx.accountToken = headers['x-account-token'] || ctx.accountToken;
+  ctx.projectToken = headers['x-project-token'] || ctx.projectToken;
   return ctx;
 }
 
 const server = new GraphQLServer({ typeDefs, resolvers, context: contextFn})
-server.start(() => console.log('Server is running on localhost:4000'))
+const options = {
+  port: 4000,
+  tracing: true,
+}
+server.start(options, ({ port }) => console.log(`Server is running on localhost:${port}`))
