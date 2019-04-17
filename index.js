@@ -1,9 +1,12 @@
+require('dotenv').config()
 const { GraphQLServer } = require('graphql-yoga')
 const fetch = require('node-fetch')
 
-const ACCOUNT_TOKEN = ""
-const PROJECT_TOKEN = ""
+const ACCOUNT_TOKEN = process.env.ACCOUNT_TOKEN
+const PROJECT_TOKEN = process.env.PROJECT_TOKEN
 const BASE_URL = "https://api.rollbar.com/api/1/"
+
+const VERBOSE = process.env.VERBOSE
 
 const typeDefs = `
   type User {
@@ -27,7 +30,7 @@ const typeDefs = `
   type Project {
     id: Int!
     account_id: Int!
-    status: String!
+    status: String
     name: String
     slug: String
   }
@@ -82,6 +85,29 @@ const typeDefs = `
     name: String
   }
 
+  type RqlJob {
+    id: Int!
+    status: RqlStatus!
+    date_modified: Int
+    job_hash: String
+    query_string: String
+    date_created: Int
+    project: Project
+    result: RqlResult
+  }
+
+  type RqlResult {
+    isSimpleSelect: Boolean
+    errors: [String]
+    warnings: [String]
+    executionTime: Float
+    effectiveTimestamp: Int
+    rowcount: Int
+    rows: [[String]]
+    selectionColumns: [String]
+    columns: [String]
+  }
+
   type Query {
     users: [User!]!
     user(id: Int!): User
@@ -132,6 +158,9 @@ const typeDefs = `
     ): [Occurrence!]
 
     occurrence(id: String!): Occurrence
+
+    rql_jobs(page: Int): [RqlJob!]
+    rql_job(id: Int!): RqlJob
   }
 
   enum AccessLevel {
@@ -159,84 +188,123 @@ const typeDefs = `
     muted
     archived
   }
+
+  enum RqlStatus {
+    new
+    running
+    success
+    failed
+    cancelled
+    timed_out
+    deleted
+  }
 `
 const resolvers = {
   Query: {
-    users: () => maybeGet(buildAccountUrl('users'), 'users', (u) => u.username && u.email),
-    user: (_, { id }) => maybeGet(buildAccountUrl(`user/${id}`)),
+    users: (_p, _a, ctx) => maybeGet(buildAccountUrl(ctx, 'users'), 'users', (u) => u.username && u.email),
+    user: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}`)),
 
-    teams: () => maybeGet(buildAccountUrl('teams')),
-    team: (_, { id }) => maybeGet(buildAccountUrl(`team/${id}`)),
+    teams: (_p, _a, ctx) => maybeGet(buildAccountUrl(ctx, 'teams')),
+    team: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `team/${id}`)),
 
-    projects: () => maybeGet(buildAccountUrl('projects'), undefined, (p) => p.status),
-    project: (_, { id }) => maybeGet(buildAccountUrl(`project/${id}`)),
+    projects: (_p, _a, ctx) => maybeGet(buildAccountUrl(ctx, 'projects'), undefined, (p) => p.status),
+    project: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `project/${id}`)),
 
-    items: (_, args) => getItems(args),
-    item: (_, { id, counter }) => {
+    items: (_, args, ctx) => getItems(ctx, args),
+    item: (_, { id, counter }, ctx) => {
       if (!id && !counter) {
         throw new Error('Must specify id or counter');
       }
       if (id) {
-        return maybeGet(buildProjectUrl(`item/${id}`));
+        return maybeGet(buildProjectUrl(ctx, `item/${id}`));
       }
-      return maybeGet(buildProjectUrl(`item_by_counter/${counter}`));
+      return maybeGet(buildProjectUrl(ctx, `item_by_counter/${counter}`));
     },
-    occurrences: (_, { page }) => {
+    occurrences: (_, { page }, ctx) => {
       let query = page ? `page=${page}` : undefined;
-      return maybeGet(buildProjectUrl('instances', query), 'instances');
+      return maybeGet(buildProjectUrl(ctx, 'instances', query), 'instances');
     },
-    occurrence: (_, { id }) => maybeGet(buildProjectUrl(`instance/${id}`)),
+    occurrence: (_, { id }, ctx) => maybeGet(buildProjectUrl(ctx, `instance/${id}`)),
+
+    rql_jobs: (_, { page }, ctx) => {
+      let query = page ? `page=${page}` : undefined;
+      return maybeGet(buildProjectUrl(ctx, 'rql/jobs', query), 'jobs');
+    },
+
+    rql_job: (_, { id }, ctx) => maybeGet(buildProjectUrl(ctx, `rql/job/${id}`, 'expand=result')),
   },
 
   Item: {
-    occurrences: ({ id }, { page }) => {
+    occurrences: ({ id }, { page }, ctx) => {
       let query = page ? `page=${page}` : undefined;
-      return maybeGet(buildProjectUrl(`item/${id}/instances`, query), 'instances');
+      return maybeGet(buildProjectUrl(ctx, `item/${id}/instances`, query), 'instances');
+    },
+  },
+
+  RqlJob: {
+    project: ({ project_id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `project/${project_id}`)),
+    result: ({ id, result}, _, ctx) => {
+      if (result) {
+        return result;
+      }
+      return maybeGet(buildProjectUrl(ctx, `rql/job/${id}/result`), 'result');
     },
   },
 
   User: {
-    teams: ({ id }) => maybeGet(buildAccountUrl(`user/${id}/teams`), 'teams'),
-    projects: ({ id }) => maybeGet(buildAccountUrl(`user/${id}/projects`), 'projects'),
+    teams: ({ id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}/teams`), 'teams'),
+    projects: ({ id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}/projects`), 'projects'),
   },
 
   Team: {
-    users: ({ id }) => {
-      return maybeGet(buildAccountUrl(`team/${id}/users`, 'page=1'))
+    users: ({ id }, _, ctx) => {
+      return maybeGet(buildAccountUrl(ctx, `team/${id}/users`, 'page=1'))
       .then(data => {
         if (!data) {
           return data;
         }
-        return Promise.all(data.map(({ user_id }) => maybeGet(buildAccountUrl(`user/${user_id}`))));
+        return Promise.all(data.map(({ user_id }) => maybeGet(buildAccountUrl(ctx, `user/${user_id}`))));
       })
     },
-    projects: ({ id }) => {
-      return maybeGet(buildAccountUrl(`team/${id}/projects`))
+    projects: ({ id }, _, ctx) => {
+      return maybeGet(buildAccountUrl(ctx, `team/${id}/projects`))
       .then(data => {
         if (!data) {
           return data;
         }
-        return Promise.all(data.map(({ project_id }) => maybeGet(buildAccountUrl(`project/${project_id}`))));
+        return Promise.all(data.map(({ project_id }) => maybeGet(buildAccountUrl(ctx, `project/${project_id}`))));
       })
     },
   },
 }
 
-function buildAccountUrl(endpoint, query) {
+function buildAccountUrl(ctx, endpoint, query) {
   query = query ? `&${query}` : ''
-  return `${BASE_URL}${endpoint}?access_token=${ACCOUNT_TOKEN}${query}`
+  return `${BASE_URL}${endpoint}?access_token=${ctx.accountToken}${query}`
 }
 
-function buildProjectUrl(endpoint, query) {
+function buildProjectUrl(ctx, endpoint, query) {
   query = query ? `&${query}` : ''
-  return `${BASE_URL}${endpoint}?access_token=${PROJECT_TOKEN}${query}`
+  return `${BASE_URL}${endpoint}?access_token=${ctx.projectToken}${query}`
+}
+
+function niceUrl(url) {
+  let parts = url.split('?');
+  if (parts[1].length > 46) {
+    return [parts[0].substr(30), parts[1].substr(46)].join('?');
+  }
+  return parts[0].substr(30);
 }
 
 function maybeGet(url, path, filter) {
+  if (VERBOSE) {
+    console.log("GET :", niceUrl(url));
+  }
   return fetch(url)
     .then(res => res.json())
     .then(data => {
       if (data.err) {
+        console.error(data);
         return null;
       }
       if (!path) {
@@ -255,7 +323,7 @@ function maybeGet(url, path, filter) {
     })
 }
 
-function getItems(args) {
+function getItems(ctx, args) {
   let qs = [];
   const { assigned_user, page, query, environment, framework, ids, level, status } = args;
   if (assigned_user) {
@@ -283,8 +351,19 @@ function getItems(args) {
     status.forEach(e => qs.push(`status=${e}`));
   }
   qs = qs ? qs.join('&') : undefined;
-  return maybeGet(buildProjectUrl('items', qs), 'items');
+  return maybeGet(buildProjectUrl(ctx, 'items', qs), 'items');
 }
 
-const server = new GraphQLServer({ typeDefs, resolvers })
+function contextFn({ request, response, connection }) {
+  let ctx = {accountToken: ACCOUNT_TOKEN, projectToken: PROJECT_TOKEN}
+  if (request.headers && request.headers['x-account-token']) {
+    ctx.accountToken = request.headers['x-account-token'];
+  }
+  if (request.headers && request.headers['x-project-token']) {
+    ctx.projectToken = request.headers['x-project-token'];
+  }
+  return ctx;
+}
+
+const server = new GraphQLServer({ typeDefs, resolvers, context: contextFn})
 server.start(() => console.log('Server is running on localhost:4000'))
