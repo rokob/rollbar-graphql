@@ -12,8 +12,6 @@ const VERBOSE = process.env.VERBOSE
 const CACHE = process.env.CACHE
 
 const typeDefs = `
-  scalar JSON
-
   type User {
     id: Int!
     username: String!
@@ -206,26 +204,9 @@ const typeDefs = `
     timed_out
     deleted
   }
-`
 
-function trunc({ first, skip }, promise) {
-  if (!promise) {
-    return promise;
-  }
-  return promise.then(data => {
-    if (!data) {
-      return data;
-    }
-    if (first == null && skip == null) {
-      return data;
-    }
-    if (first == null) {
-      return data.slice(skip + 1);
-    }
-    skip = skip || -1;
-    return data.slice(skip + 1, skip + 1 + first);
-  })
-}
+  scalar JSON
+`
 
 const resolvers = {
   Query: {
@@ -385,6 +366,25 @@ function getItems(ctx, args) {
   }
   qs = qs ? qs.join('&') : undefined;
   return maybeGet(buildProjectUrl(ctx, 'items', qs), 'items');
+}
+
+function trunc({ first, skip }, promise) {
+  if (!promise) {
+    return promise;
+  }
+  return promise.then(data => {
+    if (!data) {
+      return data;
+    }
+    if (first == null && skip == null) {
+      return data;
+    }
+    if (first == null) {
+      return data.slice(skip + 1);
+    }
+    skip = skip || -1;
+    return data.slice(skip + 1, skip + 1 + first);
+  })
 }
 
 function contextFn({ request, response, connection }) {
