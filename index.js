@@ -8,6 +8,7 @@ const PROJECT_TOKEN = process.env.PROJECT_TOKEN
 const BASE_URL = "https://api.rollbar.com/api/1/"
 
 const VERBOSE = process.env.VERBOSE
+const CACHE = process.env.CACHE
 
 const typeDefs = `
   type User {
@@ -112,13 +113,10 @@ const typeDefs = `
   type Query {
     users(first: Int, skip: Int): [User!]!
     user(id: Int!): User
-
     teams(first: Int, skip: Int): [Team!]!
     team(id: Int!): Team
-
     projects(first: Int, skip: Int): [Project!]!
     project(id: Int!): Project
-
     items(
       "Only items assigned to the specified user will be returned. Must be a valid Rollbar username, or you can use the keywords 'assigned' (items that are assigned to any owner) or 'unassigned' (items with no owner)."
       assigned_user: String
@@ -152,14 +150,11 @@ const typeDefs = `
       "Item counter for an item in the project. The counter can be found in URLs"
       counter: Int
     ): Item
-
     occurrences(
       "Page number starting at 1. 20 occurrences are returned per page"
       page: Int
     ): [Occurrence!]
-
     occurrence(id: String!): Occurrence
-
     rql_jobs(page: Int): [RqlJob!]
     rql_job(id: Int!): RqlJob
   }
@@ -173,6 +168,8 @@ const typeDefs = `
     light
     "everyone is not in the spec"
     everyone
+    "owner is not in the spec"
+    owner
   }
 
   enum Level {
@@ -224,13 +221,10 @@ const resolvers = {
   Query: {
     users: (_p, args, ctx) => trunc(args, maybeGet(buildAccountUrl(ctx, 'users'), 'users', (u) => u.username && u.email)),
     user: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}`)),
-
     teams: (_p, args, ctx) => trunc(args, maybeGet(buildAccountUrl(ctx, 'teams'))),
     team: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `team/${id}`)),
-
     projects: (_p, args, ctx) => trunc(args, maybeGet(buildAccountUrl(ctx, 'projects'), undefined, (p) => p.status)),
     project: (_, { id }, ctx) => maybeGet(buildAccountUrl(ctx, `project/${id}`)),
-
     items: (_, args, ctx) => getItems(ctx, args),
     item: (_, { id, counter }, ctx) => {
       if (!id && !counter) {
@@ -246,22 +240,18 @@ const resolvers = {
       return maybeGet(buildProjectUrl(ctx, 'instances', query), 'instances');
     },
     occurrence: (_, { id }, ctx) => maybeGet(buildProjectUrl(ctx, `instance/${id}`)),
-
     rql_jobs: (_, { page }, ctx) => {
       let query = page ? `page=${page}` : undefined;
       return maybeGet(buildProjectUrl(ctx, 'rql/jobs', query), 'jobs');
     },
-
     rql_job: (_, { id }, ctx) => maybeGet(buildProjectUrl(ctx, `rql/job/${id}`, 'expand=result')),
   },
-
   Item: {
     occurrences: ({ id }, { page }, ctx) => {
       let query = page ? `page=${page}` : undefined;
       return maybeGet(buildProjectUrl(ctx, `item/${id}/instances`, query), 'instances');
     },
   },
-
   RqlJob: {
     project: ({ project_id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `project/${project_id}`)),
     result: ({ id, result }, _, ctx) => {
@@ -271,12 +261,10 @@ const resolvers = {
       return maybeGet(buildProjectUrl(ctx, `rql/job/${id}/result`), 'result');
     },
   },
-
   User: {
     teams: ({ id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}/teams`), 'teams'),
     projects: ({ id }, _, ctx) => maybeGet(buildAccountUrl(ctx, `user/${id}/projects`), 'projects'),
   },
-
   Team: {
     users: ({ id }, _, ctx) => {
       return maybeGet(buildAccountUrl(ctx, `team/${id}/users`, 'page=1'))
@@ -317,11 +305,20 @@ function niceUrl(url) {
   return parts[0].substr(BASE_URL.length-1);
 }
 
+let cache = {}
+
 function maybeGet(url, path, filter) {
-  if (VERBOSE) {
-    console.log("GET: ", niceUrl(url));
+  if (CACHE && cache[[url, path]]) {
+    if (VERBOSE) {
+      console.log("GET (cached): ", niceUrl(url));
+    }
+    return cache[[url, path]];
+  } else {
+    if (VERBOSE) {
+      console.log("GET: ", niceUrl(url));
+    }
   }
-  return fetch(url)
+  let p = fetch(url)
     .then(res => res.json())
     .then(data => {
       if (data.err) {
@@ -341,7 +338,11 @@ function maybeGet(url, path, filter) {
         return result;
       }
       return result.filter(filter);
-    })
+    });
+  if (CACHE) {
+    cache[[url, path]] = p;
+  }
+  return p;
 }
 
 function getItems(ctx, args) {
