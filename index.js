@@ -2,6 +2,7 @@ require('dotenv').config()
 
 const { GraphQLServer } = require('graphql-yoga')
 const fetch = require('node-fetch')
+const GraphQLJSON = require('graphql-type-json');
 
 const ACCOUNT_TOKEN = process.env.ACCOUNT_TOKEN
 const PROJECT_TOKEN = process.env.PROJECT_TOKEN
@@ -11,6 +12,8 @@ const VERBOSE = process.env.VERBOSE
 const CACHE = process.env.CACHE
 
 const typeDefs = `
+  scalar JSON
+
   type User {
     id: Int!
     username: String!
@@ -72,6 +75,7 @@ const typeDefs = `
     project_id: Int!
     timestamp: Int
     version: Int
+    billable: Int
     data: OccurrenceData
   }
 
@@ -80,6 +84,12 @@ const typeDefs = `
     level: Level
     environment: String
     notifier: Notifier
+    metadata: JSON
+    timestamp: Int
+    server: JSON
+    framework: String
+    body: JSON
+    language: String
   }
 
   type Notifier {
@@ -285,6 +295,7 @@ const resolvers = {
       })
     },
   },
+  JSON: GraphQLJSON,
 }
 
 function buildAccountUrl(ctx, endpoint, query) {
